@@ -1,0 +1,9 @@
+{
+	"name": "projectDataFactory1208",
+	"location": "centralindia",
+	"identity": {
+		"type": "SystemAssigned",
+		"principalId": "9175877a-dcdb-4109-8a68-7220ffb706ce",
+		"tenantId": "e14e73eb-5251-4388-8d67-8f9f2e2d5a46"
+	}
+}
