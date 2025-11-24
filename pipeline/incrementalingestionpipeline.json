@@ -31,7 +31,7 @@
 					"source": {
 						"type": "AzureSqlSource",
 						"sqlReaderQuery": {
-							"value": "SELECT * FROM @{pipeline().parameters.schema}.@{pipeline().parameters.table} WHERE @{pipeline().parameters.cdc} > '@{activity('cdc').output.value[0].cdc}'",
+							"value": "@concat(\n    'SELECT * FROM ',\n    pipeline().parameters.schema, '.', pipeline().parameters.table,\n    ' WHERE ',\n    pipeline().parameters.cdc,\n    ' > TRY_CONVERT(datetime2, ''',\n    replace(activity('cdc').output.value[0].cdc, 'Z', ''),\n    ''')'\n)\n",
 							"type": "Expression"
 						},
 						"queryTimeout": "02:00:00",
@@ -131,6 +131,116 @@
 						"value": "@utcNow()",
 						"type": "Expression"
 					}
+				}
+			},
+			{
+				"name": "last_cdc_update",
+				"type": "Copy",
+				"dependsOn": [
+					{
+						"activity": "max_cdc",
+						"dependencyConditions": [
+							"Completed"
+						]
+					}
+				],
+				"policy": {
+					"timeout": "0.12:00:00",
+					"retry": 0,
+					"retryIntervalInSeconds": 30,
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"source": {
+						"type": "JsonSource",
+						"additionalColumns": [
+							{
+								"name": "cdc",
+								"value": {
+									"value": "@activity('max_cdc').output.resultSets[0].rows[0].max_cdc\n",
+									"type": "Expression"
+								}
+							}
+						],
+						"storeSettings": {
+							"type": "AzureBlobFSReadSettings",
+							"recursive": true,
+							"enablePartitionDiscovery": false
+						},
+						"formatSettings": {
+							"type": "JsonReadSettings"
+						}
+					},
+					"sink": {
+						"type": "JsonSink",
+						"storeSettings": {
+							"type": "AzureBlobFSWriteSettings"
+						},
+						"formatSettings": {
+							"type": "JsonWriteSettings"
+						}
+					},
+					"enableStaging": false
+				},
+				"inputs": [
+					{
+						"referenceName": "pipelineJson",
+						"type": "DatasetReference",
+						"parameters": {
+							"Container": "bronze",
+							"Folder": "monitor",
+							"File": "empty.json"
+						}
+					}
+				],
+				"outputs": [
+					{
+						"referenceName": "pipelineJson",
+						"type": "DatasetReference",
+						"parameters": {
+							"Container": "bronze",
+							"Folder": "monitor",
+							"File": "cdc.json"
+						}
+					}
+				]
+			},
+			{
+				"name": "max_cdc",
+				"type": "Script",
+				"dependsOn": [
+					{
+						"activity": "SQL to Data Lake",
+						"dependencyConditions": [
+							"Completed"
+						]
+					}
+				],
+				"policy": {
+					"timeout": "0.12:00:00",
+					"retry": 0,
+					"retryIntervalInSeconds": 30,
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"linkedServiceName": {
+					"referenceName": "AzureSqlDatabase1",
+					"type": "LinkedServiceReference"
+				},
+				"typeProperties": {
+					"scripts": [
+						{
+							"type": "Query",
+							"text": {
+								"value": "@concat('SELECT MAX(', pipeline().parameters.cdc, ') AS max_cdc FROM ', pipeline().parameters.schema, '.', pipeline().parameters.table)",
+								"type": "Expression"
+							}
+						}
+					],
+					"scriptBlockExecutionTimeout": "02:00:00"
 				}
 			}
 		],
