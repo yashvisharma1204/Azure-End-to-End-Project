@@ -71,7 +71,7 @@
 							"source": {
 								"type": "AzureSqlSource",
 								"sqlReaderQuery": {
-									"value": "@concat(\n    'SELECT * FROM ',\n    pipeline().parameters.schema, '.', pipeline().parameters.table,\n    ' WHERE ',\n    pipeline().parameters.cdc,\n    ' > TRY_CONVERT(datetime2, ''',\n    replace(activity('cdc').output.value[0].cdc, 'Z', ''),\n    ''')'\n)\n",
+									"value": "SELECT * FROM @{pipeline().parameters.schema}.@{pipeline().parameters.table} \n    WHERE @{pipeline().parameters.cdc} > '@{if(empty(pipeline().parameters.from_date), activity('cdc').output.value[0].cdc,pipeline().parameters.from_date)}'",
 									"type": "Expression"
 								},
 								"queryTimeout": "02:00:00",
@@ -350,6 +350,9 @@
 					},
 					"cdc": {
 						"type": "string"
+					},
+					"from_date": {
+						"type": "string"
 					}
 				},
 				"variables": {
@@ -520,6 +523,354 @@
 				}
 			},
 			"dependsOn": []
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/incrementalingestionpipeline_loop')]",
+			"type": "Microsoft.DataFactory/factories/pipelines",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"activities": [
+					{
+						"name": "ForEach1",
+						"type": "ForEach",
+						"dependsOn": [],
+						"userProperties": [],
+						"typeProperties": {
+							"items": {
+								"value": "@pipeline().parameters.look_input",
+								"type": "Expression"
+							},
+							"isSequential": true,
+							"activities": [
+								{
+									"name": "cdc_copy1",
+									"type": "Lookup",
+									"dependsOn": [],
+									"policy": {
+										"timeout": "0.12:00:00",
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"source": {
+											"type": "JsonSource",
+											"storeSettings": {
+												"type": "AzureBlobFSReadSettings",
+												"recursive": true,
+												"enablePartitionDiscovery": false
+											},
+											"formatSettings": {
+												"type": "JsonReadSettings"
+											}
+										},
+										"dataset": {
+											"referenceName": "pipelineJson",
+											"type": "DatasetReference",
+											"parameters": {
+												"Container": "bronze",
+												"Folder": {
+													"value": "@{item().table}_cdc",
+													"type": "Expression"
+												},
+												"File": "cdc.json"
+											}
+										},
+										"firstRowOnly": false
+									}
+								},
+								{
+									"name": "Current_copy1",
+									"type": "SetVariable",
+									"dependsOn": [],
+									"policy": {
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"variableName": "current",
+										"value": {
+											"value": "@utcNow()",
+											"type": "Expression"
+										}
+									}
+								},
+								{
+									"name": "SQL to Data Lake_copy1",
+									"type": "Copy",
+									"dependsOn": [
+										{
+											"activity": "cdc_copy1",
+											"dependencyConditions": [
+												"Completed"
+											]
+										},
+										{
+											"activity": "Current_copy1",
+											"dependencyConditions": [
+												"Completed"
+											]
+										}
+									],
+									"policy": {
+										"timeout": "0.12:00:00",
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"source": {
+											"type": "AzureSqlSource",
+											"sqlReaderQuery": {
+												"value": "@concat(\n    'SELECT * FROM ',\n    item().schema, '.', item().table,\n    ' WHERE ',\n    item().cdc_col, ' > ''',\n    if(\n        empty(item().from_date),\n        activity('cdc_copy1').output.value[0].cdc,\n        item().from_date\n    ),\n    ''''\n)\n",
+												"type": "Expression"
+											},
+											"queryTimeout": "02:00:00",
+											"partitionOption": "None"
+										},
+										"sink": {
+											"type": "ParquetSink",
+											"storeSettings": {
+												"type": "AzureBlobFSWriteSettings"
+											},
+											"formatSettings": {
+												"type": "ParquetWriteSettings"
+											}
+										},
+										"enableStaging": false,
+										"translator": {
+											"type": "TabularTranslator",
+											"typeConversion": true,
+											"typeConversionSettings": {
+												"allowDataTruncation": true,
+												"treatBooleanAsNumber": false
+											}
+										}
+									},
+									"inputs": [
+										{
+											"referenceName": "AzureSqlTable12",
+											"type": "DatasetReference",
+											"parameters": {}
+										}
+									],
+									"outputs": [
+										{
+											"referenceName": "Parquet1",
+											"type": "DatasetReference",
+											"parameters": {
+												"container": "bronze",
+												"folder": {
+													"value": "@{item().table}_cdc",
+													"type": "Expression"
+												},
+												"file": {
+													"value": "@concat(item().table,'_',variables('current'))",
+													"type": "Expression"
+												}
+											}
+										}
+									]
+								},
+								{
+									"name": "If_cdc_copy1",
+									"description": "",
+									"type": "IfCondition",
+									"dependsOn": [
+										{
+											"activity": "SQL to Data Lake_copy1",
+											"dependencyConditions": [
+												"Completed"
+											]
+										}
+									],
+									"userProperties": [],
+									"typeProperties": {
+										"expression": {
+											"value": "@greater(activity('SQL to Data Lake_copy1').output.rowsRead, 0)\n",
+											"type": "Expression"
+										},
+										"ifFalseActivities": [
+											{
+												"name": "Delete_activity_copy1",
+												"type": "Delete",
+												"dependsOn": [],
+												"policy": {
+													"timeout": "0.12:00:00",
+													"retry": 0,
+													"retryIntervalInSeconds": 30,
+													"secureOutput": false,
+													"secureInput": false
+												},
+												"userProperties": [],
+												"typeProperties": {
+													"dataset": {
+														"referenceName": "Parquet1",
+														"type": "DatasetReference",
+														"parameters": {
+															"container": "bronze",
+															"folder": {
+																"value": "@item().table",
+																"type": "Expression"
+															},
+															"file": {
+																"value": "{@item().table,'_',variables('current')}",
+																"type": "Expression"
+															}
+														}
+													},
+													"enableLogging": false,
+													"storeSettings": {
+														"type": "AzureBlobFSReadSettings",
+														"recursive": true,
+														"enablePartitionDiscovery": false
+													}
+												}
+											}
+										],
+										"ifTrueActivities": [
+											{
+												"name": "max_cdc_copy1",
+												"type": "Script",
+												"dependsOn": [],
+												"policy": {
+													"timeout": "0.12:00:00",
+													"retry": 0,
+													"retryIntervalInSeconds": 30,
+													"secureOutput": false,
+													"secureInput": false
+												},
+												"userProperties": [],
+												"linkedServiceName": {
+													"referenceName": "AzureSqlDatabase1",
+													"type": "LinkedServiceReference"
+												},
+												"typeProperties": {
+													"scripts": [
+														{
+															"type": "Query",
+															"text": {
+																"value": "@concat(\n    'SELECT MAX(', item().cdc_col, ') AS max_cdc FROM ',\n    item().schema, '.', item().table\n)\n",
+																"type": "Expression"
+															}
+														}
+													],
+													"scriptBlockExecutionTimeout": "02:00:00"
+												}
+											},
+											{
+												"name": "last_cdc_update_copy1",
+												"type": "Copy",
+												"dependsOn": [
+													{
+														"activity": "max_cdc_copy1",
+														"dependencyConditions": [
+															"Succeeded"
+														]
+													}
+												],
+												"policy": {
+													"timeout": "0.12:00:00",
+													"retry": 0,
+													"retryIntervalInSeconds": 30,
+													"secureOutput": false,
+													"secureInput": false
+												},
+												"userProperties": [],
+												"typeProperties": {
+													"source": {
+														"type": "JsonSource",
+														"additionalColumns": [
+															{
+																"name": "cdc",
+																"value": {
+																	"value": "@activity('max_cdc_copy1').output.resultSets[0].rows[0].max_cdc\n",
+																	"type": "Expression"
+																}
+															}
+														],
+														"storeSettings": {
+															"type": "AzureBlobFSReadSettings",
+															"recursive": true,
+															"enablePartitionDiscovery": false
+														},
+														"formatSettings": {
+															"type": "JsonReadSettings"
+														}
+													},
+													"sink": {
+														"type": "JsonSink",
+														"storeSettings": {
+															"type": "AzureBlobFSWriteSettings"
+														},
+														"formatSettings": {
+															"type": "JsonWriteSettings"
+														}
+													},
+													"enableStaging": false
+												},
+												"inputs": [
+													{
+														"referenceName": "pipelineJson",
+														"type": "DatasetReference",
+														"parameters": {
+															"Container": "bronze",
+															"Folder": {
+																"value": "@{item().table}_cdc",
+																"type": "Expression"
+															},
+															"File": "empty.json"
+														}
+													}
+												],
+												"outputs": [
+													{
+														"referenceName": "pipelineJson",
+														"type": "DatasetReference",
+														"parameters": {
+															"Container": "bronze",
+															"Folder": {
+																"value": "@{item().table}_cdc",
+																"type": "Expression"
+															},
+															"File": "cdc.json"
+														}
+													}
+												]
+											}
+										]
+									}
+								}
+							]
+						}
+					}
+				],
+				"policy": {
+					"elapsedTimeMetric": {}
+				},
+				"parameters": {
+					"look_input": {
+						"type": "array"
+					}
+				},
+				"variables": {
+					"current": {
+						"type": "String"
+					}
+				},
+				"annotations": []
+			},
+			"dependsOn": [
+				"[concat(variables('factoryId'), '/datasets/pipelineJson')]",
+				"[concat(variables('factoryId'), '/datasets/AzureSqlTable12')]",
+				"[concat(variables('factoryId'), '/datasets/Parquet1')]",
+				"[concat(variables('factoryId'), '/linkedServices/AzureSqlDatabase1')]"
+			]
 		}
 	]
 }
